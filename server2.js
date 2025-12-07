@@ -246,6 +246,6 @@ app.get("/health", (req, res) => res.json({ ok: true }));
 // ==========================
 // START
 // ==========================
-const PORT = 4000;
+const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => addLog("Server started on port", PORT));
