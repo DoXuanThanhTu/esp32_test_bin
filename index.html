@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Smart Garden Dashboard</title>
+
+    <style>
+      body {
+        font-family: Arial;
+        background: #f2f2f2;
+      }
+
+      .panel {
+        background: white;
+        padding: 12px;
+        margin: 10px;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      }
+
+      button,
+      input {
+        padding: 6px;
+        margin: 3px;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+      }
+
+      .box {
+        border: 1px solid #ddd;
+        padding: 10px;
+        border-radius: 8px;
+      }
+
+      .chart-box {
+        width: 95%;
+        max-width: 900px;
+      }
+
+      h2 {
+        margin-left: 10px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <h2>🌱 Smart Garden Dashboard</h2>
+
+    <!-- realtime data -->
+    <div class="panel">
+      <b>Realtime Sensor</b><br />
+
+      Temp: <span id="temp">0</span> °C<br />
+      Hum: <span id="hum">0</span> %<br />
+      Soil: <span id="soil">0</span> %<br />
+      Pump: <span id="pump">OFF</span>
+    </div>
+
+    <!-- controls -->
+    <div class="panel">
+      <b>Controls</b><br />
+
+      <button onclick="setPump(1)">PUMP ON</button>
+      <button onclick="setPump(0)">PUMP OFF</button>
+    </div>
+
+    <!-- threshold -->
+    <div class="panel">
+      <b>Threshold Settings</b>
+
+      <div class="grid">
+        <div class="box">
+          <b>Temperature</b><br />
+          Min: <input id="tmin" type="number" /><br />
+          Max: <input id="tmax" type="number" /><br />
+        </div>
+
+        <div class="box">
+          <b>Humidity</b><br />
+          Min: <input id="hmin" type="number" /><br />
+          Max: <input id="hmax" type="number" /><br />
+        </div>
+
+        <div class="box">
+          <b>Soil</b><br />
+          Min: <input id="smin" type="number" /><br />
+          Max: <input id="smax" type="number" /><br />
+        </div>
+      </div>
+
+      <button onclick="saveThreshold()">Save Threshold</button>
+    </div>
+
+    <!-- charts -->
+    <div class="panel">
+      <b>Temperature Chart</b>
+      <div class="chart-box"><canvas id="chartTemp"></canvas></div>
+    </div>
+
+    <div class="panel">
+      <b>Humidity Chart</b>
+      <div class="chart-box"><canvas id="chartHum"></canvas></div>
+    </div>
+
+    <div class="panel">
+      <b>Soil Chart</b>
+      <div class="chart-box"><canvas id="chartSoil"></canvas></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+
+    <script>
+      // ==========================
+      // CONFIG
+      // ==========================
+      const MQTT_URL =
+        "wss://28f49484412341f9a4480874c05255d3.s1.eu.hivemq.cloud:8884/mqtt";
+
+      const options = {
+        username: "Admin123",
+        password: "Admin123",
+        rejectUnauthorized: false,
+      };
+
+      const DEVICE_ID = "esp32_wokwi_test_bin";
+
+      const TOPIC_DATA = `devices/${DEVICE_ID}/data`;
+      const TOPIC_STATUS = `devices/${DEVICE_ID}/status`;
+
+      const API = "http://localhost:4000";
+
+      // ==========================
+      // HISTORIES
+      // ==========================
+      let history = { temp: [], hum: [], soil: [] };
+      const LIMIT = 150;
+
+      // ==========================
+      // MQTT
+      // ==========================
+      const client = mqtt.connect(MQTT_URL, options);
+
+      client.on("connect", () => {
+        console.log("MQTT connected");
+        client.subscribe(TOPIC_DATA);
+        client.subscribe(TOPIC_STATUS);
+      });
+
+      // SENSOR = 6 bytes
+      function decodeSensor(buf) {
+        return {
+          temp: buf.readInt16LE(0) / 10,
+          humidity: buf.readInt16LE(2) / 10,
+          soil: buf.readInt16LE(4) / 10,
+        };
+      }
+
+      // STATUS = 1 byte
+      function decodeStatus(buf) {
+        return { pump: buf.readUInt8(0) === 1 };
+      }
+
+      // ==========================
+      // CHARTS
+      // ==========================
+      function makeChart(id, label) {
+        return new Chart(document.getElementById(id), {
+          type: "line",
+          data: {
+            labels: [],
+            datasets: [{ label, data: [], borderWidth: 2, tension: 0.25 }],
+          },
+          options: { animation: false, responsive: true },
+        });
+      }
+
+      const chartTemp = makeChart("chartTemp", "Temp");
+      const chartHum = makeChart("chartHum", "Hum");
+      const chartSoil = makeChart("chartSoil", "Soil");
+
+      function updateChart(chart, arr, val) {
+        arr.push(val);
+        if (arr.length > LIMIT) arr.shift();
+        chart.data.labels = arr.map((_, i) => i);
+        chart.data.datasets[0].data = arr;
+        chart.update();
+      }
+
+      // ==========================
+      // MQTT MESSAGE HANDLER
+      // ==========================
+      client.on("message", (topic, msg) => {
+        if (topic === TOPIC_DATA) {
+          const d = decodeSensor(msg);
+          updateSensorUI(d);
+          updateChart(chartTemp, history.temp, d.temp);
+          updateChart(chartHum, history.hum, d.humidity);
+          updateChart(chartSoil, history.soil, d.soil);
+        }
+
+        if (topic === TOPIC_STATUS) {
+          const s = decodeStatus(msg);
+          pump.innerText = s.pump ? "ON" : "OFF";
+        }
+      });
+
+      function updateSensorUI(d) {
+        temp.innerText = d.temp;
+        hum.innerText = d.humidity;
+        soil.innerText = d.soil;
+      }
+
+      // ==========================
+      // API HELPERS
+      // ==========================
+      function post(url, data) {
+        return fetch(API + url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        });
+      }
+
+      // Pump control
+      function setPump(v) {
+        post("/pump", { value: v });
+      }
+
+      // threshold
+      async function loadThreshold() {
+        let r = await fetch(API + "/threshold");
+        let t = await r.json();
+
+        tmin.value = t.temp.min;
+        tmax.value = t.temp.max;
+
+        hmin.value = t.humidity.min;
+        hmax.value = t.humidity.max;
+
+        smin.value = t.soil.min;
+        smax.value = t.soil.max;
+      }
+
+      function saveThreshold() {
+        const data = {
+          temp: { min: +tmin.value, max: +tmax.value },
+          humidity: { min: +hmin.value, max: +hmax.value },
+          soil: { min: +smin.value, max: +smax.value },
+        };
+
+        post("/threshold", data);
+        alert("Threshold saved!");
+      }
+
+      loadThreshold();
+    </script>
+  </body>
+</html>
